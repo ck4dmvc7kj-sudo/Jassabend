@@ -118,6 +118,22 @@
   .banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
     background: #2a1d05; border: 1px solid var(--gold); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 16px; }
   h2.jahr { margin: 26px 0 10px; }
+  .trumpf { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+  .trumpf button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; font-size: 14px; }
+  .trumpf button small { color: var(--muted); }
+  button.gewaehlt { border-color: var(--rot); background: #3a1214; }
+  .weis { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .weis button { padding: 8px 10px; min-width: 52px; }
+  .eingabe-team { background: var(--panel2); border-radius: 12px; padding: 12px; }
+  .eingabe-team .namen { font-weight: 600; margin-bottom: 8px; }
+  .eingabe-team input[type=number] { width: 100%; font-size: 22px; text-align: center; }
+  .vorschau { font-size: 18px; text-align: center; }
+  .balken { position: relative; height: 10px; background: var(--panel2); border-radius: 99px; margin: 8px 0 2px; overflow: visible; }
+  .balken > div { height: 100%; background: var(--rot); border-radius: 99px; }
+  .balken .berg-marke { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--muted); }
+  .ansager { font-size: 17px; }
+  tr.klickbar { cursor: pointer; }
+  tr.bearbeitet td { background: #3a1214; }
   .toast {
     position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
     background: var(--panel2); border: 1px solid var(--line); padding: 12px 20px; border-radius: 12px;
@@ -156,7 +172,10 @@ function standardDaten() {
   return {
     version: 1,
     spieler: ['Spieler 1', 'Spieler 2', 'Spieler 3', 'Spieler 4'],
-    regeln: { berg: 1, match: 1, ziel: 2, franken: 1, zielPunkte: 3000 },
+    regeln: {
+      berg: 1, match: 1, ziel: 2, franken: 1, zielPunkte: 3000, bergPunkte: 1500, matschPunkte: 257,
+      faktoren: { rosen: 1, eicheln: 1, schilten: 2, schellen: 2, obenabe: 3, undenufe: 4 },
+    },
     titel: ['Jasspapst', 'Jasskönig', 'Jassprinz', 'Jasslehrling'],
     abende: [],
     aktiv: null,
@@ -172,9 +191,23 @@ let ranglistenJahr = 'alle';
 function laden() {
   try {
     const roh = localStorage.getItem(SPEICHER_SCHLUESSEL);
-    if (roh) return Object.assign(standardDaten(), JSON.parse(roh));
+    if (roh) return ergaenzen(JSON.parse(roh));
   } catch (e) { console.error(e); }
   return standardDaten();
+}
+
+// Ältere Daten um neue Felder ergänzen
+function ergaenzen(geladen) {
+  const std = standardDaten();
+  const d = Object.assign(std, geladen);
+  d.regeln = Object.assign({}, standardDaten().regeln, geladen.regeln);
+  d.regeln.faktoren = Object.assign({}, standardDaten().regeln.faktoren, (geladen.regeln || {}).faktoren);
+  if (d.aktiv) d.aktiv.laufend = Object.assign(neueLaufendePartie(), d.aktiv.laufend);
+  return d;
+}
+
+function neueLaufendePartie() {
+  return { ereignisse: [], punkte: ['', ''], spiele: [], start: null, richtung: 0 };
 }
 
 function speichern() {
@@ -319,6 +352,120 @@ function aenderung() {
   speichern();
 }
 
+// ---------- Zählen ----------
+
+const STICH_TOTAL = 157;
+const STOECK = 20;
+const TRUMPF = [
+  { key: 'rosen', name: 'Rosen', farbe: true },
+  { key: 'eicheln', name: 'Eicheln', farbe: true },
+  { key: 'schilten', name: 'Schilten', farbe: true },
+  { key: 'schellen', name: 'Schellen', farbe: true },
+  { key: 'obenabe', name: 'Obenabe', symbol: '⬇' },
+  { key: 'undenufe', name: 'Undenufe', symbol: '⬆' },
+];
+const trumpfInfo = key => TRUMPF.find(t => t.key === key);
+const trumpfBild = (key, groesse = 26) => {
+  const t = trumpfInfo(key);
+  return t.farbe ? farbe(key, groesse) : `<span style="font-size:${groesse * .8}px;line-height:${groesse}px">${t.symbol}</span>`;
+};
+
+function spielPunkte(spiel) {
+  return [0, 1].map(t => (spiel.stich[t] + spiel.weis[t] + (spiel.stoeck === t ? STOECK : 0)) * spiel.faktor);
+}
+
+// Zählt alle Spiele einer Partie zusammen und vergibt Berg-, Ziel- und Matsch-Striche.
+// Reihenfolge innerhalb eines Spiels: Stöck → Stich → Weis.
+// Kommen beide Teams im gleichen Schritt über eine Marke, gewinnt, wer danach mehr hat.
+function auswerten(spiele) {
+  const r = daten.regeln;
+  const total = [0, 0];
+  const ereignisse = [];
+  let berg = null, ziel = null;
+  const pruefen = teams => {
+    for (const t of teams) {
+      if (berg === null && total[t] >= r.bergPunkte) { berg = t; ereignisse.push({ team: t, typ: 'berg', wert: r.berg }); }
+      if (ziel === null && total[t] >= r.zielPunkte) { ziel = t; ereignisse.push({ team: t, typ: 'ziel', wert: r.ziel }); }
+    }
+  };
+  const beide = () => total[0] >= total[1] ? [0, 1] : [1, 0];
+  for (const s of spiele) {
+    if (s.stoeck !== null) { total[s.stoeck] += STOECK * s.faktor; pruefen([s.stoeck]); }
+    total[0] += s.stich[0] * s.faktor; total[1] += s.stich[1] * s.faktor; pruefen(beide());
+    if (s.matsch !== null) ereignisse.push({ team: s.matsch, typ: 'match', wert: r.match });
+    total[0] += s.weis[0] * s.faktor; total[1] += s.weis[1] * s.faktor; pruefen(beide());
+  }
+  return { total, ereignisse, berg, ziel };
+}
+
+// Von Hand gesetzte Striche plus die aus dem Zählen; Berg und Ziel gibt es nur einmal
+function alleEreignisse(l) {
+  const auto = auswerten(l.spiele).ereignisse
+    .filter(e => !(TYPEN[e.typ].einmalig && l.ereignisse.some(m => m.typ === e.typ)));
+  return [...l.ereignisse, ...auto];
+}
+
+// Sitzordnung: die Partner sitzen sich gegenüber
+function sitzordnung(teams, richtung) {
+  const [a, b] = teams;
+  return richtung ? [a[0], b[1], a[1], b[0]] : [a[0], b[0], a[1], b[1]];
+}
+
+function ansagerFuer(l, teams, spielNr) {
+  if (l.start === null) return null;
+  const ordnung = sitzordnung(teams, l.richtung);
+  const i = ordnung.indexOf(l.start);
+  return i < 0 ? null : ordnung[(i + spielNr) % 4];
+}
+
+const leeresFormular = () => ({ trumpf: null, stich: ['', ''], matsch: null, weis: [0, 0], stoeck: null, bearbeiten: null });
+let formular = leeresFormular();
+
+function formularSpiel() {
+  const f = formular;
+  if (!f.trumpf) return { fehler: 'Bitte zuerst den Trumpf wählen.' };
+  let stich;
+  if (f.matsch !== null) {
+    stich = f.matsch === 0 ? [daten.regeln.matschPunkte, 0] : [0, daten.regeln.matschPunkte];
+  } else {
+    stich = f.stich.map(Number);
+    if (f.stich.some(x => x === '') || stich.some(x => !Number.isInteger(x) || x < 0) || stich[0] + stich[1] !== STICH_TOTAL) {
+      return { fehler: `Die Stichpunkte müssen zusammen ${STICH_TOTAL} ergeben.` };
+    }
+  }
+  return {
+    spiel: {
+      trumpf: f.trumpf,
+      faktor: daten.regeln.faktoren[f.trumpf],
+      stich,
+      matsch: f.matsch,
+      weis: f.weis.map(Number),
+      stoeck: f.stoeck,
+    },
+  };
+}
+
+function spielEintragen() {
+  const a = daten.aktiv, l = a.laufend;
+  const { spiel, fehler } = formularSpiel();
+  if (fehler) { alert(fehler); return; }
+  if (formular.bearbeiten !== null) {
+    spiel.ansager = l.spiele[formular.bearbeiten].ansager;
+    l.spiele[formular.bearbeiten] = spiel;
+  } else {
+    const zielVorher = auswerten(l.spiele).ziel;
+    spiel.ansager = ansagerFuer(l, a.teams, l.spiele.length);
+    l.spiele.push(spiel);
+    const ziel = auswerten(l.spiele).ziel;
+    if (zielVorher === null && ziel !== null) {
+      setTimeout(() => toast(`${daten.spieler[a.teams[ziel][0]]} & ${daten.spieler[a.teams[ziel][1]]} haben ${daten.regeln.zielPunkte} erreicht!`), 50);
+    }
+  }
+  formular = leeresFormular();
+  speichern();
+  zeichnen();
+}
+
 // ---------- Teams auslosen ----------
 
 const PAARUNGEN = [
@@ -343,7 +490,7 @@ function zufallsTeams(bisher) {
 
 function auslosen() {
   const a = daten.aktiv;
-  if (a.laufend.ereignisse.length && !confirm('In dieser Partie sind schon Striche eingetragen. Trotzdem neu auslosen? Die Striche gehen dann an die neuen Teams.')) return;
+  if ((a.laufend.ereignisse.length || a.laufend.spiele.length) && !confirm('In dieser Partie ist schon etwas eingetragen. Trotzdem neu auslosen? Punkte und Striche gehen dann an die neuen Teams.')) return;
   const ziel = zufallsTeams(a.teams);
   let runden = 0;
   const box = $('#los');
@@ -370,15 +517,16 @@ function neuerAbend() {
     ort: '',
     teams: zufallsTeams(),
     partien: [],
-    laufend: { ereignisse: [], punkte: ['', ''] },
+    laufend: neueLaufendePartie(),
   };
+  formular = leeresFormular();
   speichern();
   zeichnen();
 }
 
 function strichDazu(team, typ) {
   const l = daten.aktiv.laufend;
-  if (TYPEN[typ].einmalig && l.ereignisse.some(e => e.typ === typ)) return;
+  if (TYPEN[typ].einmalig && alleEreignisse(l).some(e => e.typ === typ)) return;
   l.ereignisse.push({ team, typ, wert: daten.regeln[typ] });
   speichern();
   zeichnen();
@@ -396,14 +544,17 @@ function strichWeg(team) {
 function partieAbschliessen() {
   const a = daten.aktiv;
   const l = a.laufend;
-  if (!l.ereignisse.length && !confirm('Diese Partie hat keine Striche. Trotzdem abschliessen?')) return;
-  if (!l.ereignisse.some(e => e.typ === 'ziel') && !confirm(`Noch kein Team hat das Ziel (${daten.regeln.zielPunkte}) erreicht. Trotzdem abschliessen?`)) return;
+  const ereignisse = alleEreignisse(l);
+  if (!ereignisse.length && !confirm('Diese Partie hat keine Striche. Trotzdem abschliessen?')) return;
+  if (!ereignisse.some(e => e.typ === 'ziel') && !confirm(`Noch kein Team hat das Ziel (${daten.regeln.zielPunkte}) erreicht. Trotzdem abschliessen?`)) return;
   a.partien.push({
     teams: a.teams.map(p => [...p]),
-    ereignisse: l.ereignisse,
-    punkte: l.punkte.map(p => p === '' ? null : Number(p)),
+    ereignisse,
+    punkte: l.spiele.length ? auswerten(l.spiele).total : l.punkte.map(p => p === '' ? null : Number(p)),
+    spiele: l.spiele,
   });
-  a.laufend = { ereignisse: [], punkte: ['', ''] };
+  a.laufend = Object.assign(neueLaufendePartie(), { richtung: l.richtung });
+  formular = leeresFormular();
   speichern();
   zeichnen();
   toast(`Partie ${a.partien.length} gespeichert`);
@@ -418,8 +569,8 @@ function partieLoeschen(index) {
 
 function abendAbschliessen() {
   const a = daten.aktiv;
-  if (a.laufend.ereignisse.length) {
-    alert('Die laufende Partie hat noch Striche. Bitte zuerst «Partie abschliessen» oder die Striche entfernen.');
+  if (a.laufend.ereignisse.length || a.laufend.spiele.length) {
+    alert('In der laufenden Partie ist noch etwas eingetragen. Bitte zuerst «Partie abschliessen» oder die Einträge entfernen.');
     return;
   }
   if (!a.partien.length) {
@@ -462,9 +613,11 @@ function seiteAbend() {
 
   const l = a.laufend;
   const r = daten.regeln;
-  const bergVergeben = l.ereignisse.some(e => e.typ === 'berg');
-  const zielVergeben = l.ereignisse.some(e => e.typ === 'ziel');
-  const laufendePartie = { teams: a.teams, ereignisse: l.ereignisse };
+  const ereignisse = alleEreignisse(l);
+  const bergVergeben = ereignisse.some(e => e.typ === 'berg');
+  const zielVergeben = ereignisse.some(e => e.typ === 'ziel');
+  const laufendePartie = { teams: a.teams, ereignisse };
+  const stand = auswerten(l.spiele);
   const alle = [...a.partien, laufendePartie];
   const striche = spielerStriche(alle);
   const b = beitraege(striche, r.franken);
@@ -474,7 +627,7 @@ function seiteAbend() {
   const teamFeld = t => {
     const n = teamStriche(laufendePartie, t);
     const details = Object.keys(TYPEN)
-      .map(typ => [typ, l.ereignisse.filter(e => e.team === t && e.typ === typ).length])
+      .map(typ => [typ, ereignisse.filter(e => e.team === t && e.typ === typ).length])
       .filter(([, k]) => k)
       .map(([typ, k]) => `<span class="marke ${typ === 'ziel' ? 'gold' : ''}">${TYPEN[typ].name}${k > 1 ? ' ×' + k : ''}</span>`)
       .join(' ');
@@ -492,9 +645,10 @@ function seiteAbend() {
           <button data-aktion="strich" data-team="${t}" data-typ="ziel" ${zielVergeben ? 'disabled' : ''}>${r.zielPunkte}<small>+${r.ziel}</small></button>
         </div>
         <div class="zeile weit" style="margin-top:12px">
+          ${l.spiele.length ? `<span class="gedaempft klein-text">${stand.total[t]} Punkte</span>` : `
           <label class="zeile gedaempft klein-text">Punkte
             <input type="number" inputmode="numeric" data-punkte="${t}" value="${esc(l.punkte[t])}" placeholder="optional">
-          </label>
+          </label>`}
           <button class="klein" data-aktion="strich-weg" data-team="${t}" ${l.ereignisse.some(e => e.team === t) ? '' : 'disabled'}>↶ Letzten Strich weg</button>
         </div>
       </div>`;
@@ -542,6 +696,7 @@ function seiteAbend() {
               <div class="paar" id="los-b">${paarName(a.teams[1])}</div>
             </div>
           </div>
+          ${zaehler(a)}
           <div class="gitter2">${teamFeld(0)}${teamFeld(1)}</div>
           <button class="primaer gross" style="width:100%" data-aktion="partie-abschliessen">Partie abschliessen</button>
           <div class="karte">
@@ -565,6 +720,110 @@ function seiteAbend() {
         </div>
       </div>
     </div>`;
+}
+
+function zaehler(a) {
+  const l = a.laufend;
+  const r = daten.regeln;
+  const f = formular;
+  const stand = auswerten(l.spiele);
+  const nr = f.bearbeiten !== null ? f.bearbeiten : l.spiele.length;
+  const ansager = f.bearbeiten !== null ? l.spiele[f.bearbeiten].ansager : ansagerFuer(l, a.teams, l.spiele.length);
+  const ohneStoeck = f.trumpf === 'obenabe' || f.trumpf === 'undenufe';
+  const vorschau = formularSpiel().spiel;
+
+  const ansagerZeile = l.start === null ? `
+    <div class="zeile">
+      <span class="gedaempft">Wer hat die Rosen 10?</span>
+      ${[...a.teams[0], ...a.teams[1]].map(i => `<button class="klein" data-aktion="start" data-spieler="${i}">${name(i)}</button>`).join('')}
+    </div>` : `
+    <div class="zeile ansager">
+      <span>Ansagen: <strong>${ansager === null ? '–' : name(ansager)}</strong></span>
+      <span class="gedaempft klein-text">Reihenfolge: ${sitzordnung(a.teams, l.richtung).map(name).join(' → ')}</span>
+      <button class="klein" data-aktion="richtung" title="Andere Richtung">⇄</button>
+      <button class="link klein-text" data-aktion="start-zuruecksetzen">ändern</button>
+    </div>`;
+
+  const team = t => `
+    <div class="eingabe-team stapel">
+      <div class="namen">${paarName(a.teams[t])}</div>
+      <input type="number" inputmode="numeric" data-stich="${t}" value="${f.matsch !== null ? (f.matsch === t ? r.matschPunkte : 0) : esc(f.stich[t])}"
+        placeholder="Stichpunkte" ${f.matsch !== null ? 'disabled' : ''}>
+      <div class="weis">
+        <button class="${f.matsch === t ? 'gewaehlt' : ''}" data-aktion="matsch" data-team="${t}">Matsch</button>
+        <button class="${f.stoeck === t ? 'gewaehlt' : ''}" data-aktion="stoeck" data-team="${t}" ${ohneStoeck ? 'disabled' : ''}>Stöck</button>
+      </div>
+      <div class="weis">
+        <span class="gedaempft klein-text">Weis</span>
+        ${[20, 50, 100, 150, 200].map(w => `<button data-aktion="weis" data-team="${t}" data-wert="${w}">+${w}</button>`).join('')}
+      </div>
+      <div class="weis">
+        <span class="gedaempft klein-text">Summe Weis</span>
+        <input type="number" inputmode="numeric" data-weis="${t}" value="${f.weis[t] || ''}" placeholder="0" style="width:90px;font-size:17px">
+        ${f.weis[t] ? `<button class="link" data-aktion="weis-weg" data-team="${t}">✕</button>` : ''}
+      </div>
+    </div>`;
+
+  const liste = l.spiele.length ? `
+    <table>
+      <tr><th>#</th><th>Trumpf</th><th>Ansage</th><th class="rechts">${paarName(a.teams[0])}</th><th class="rechts">${paarName(a.teams[1])}</th><th></th></tr>
+      ${(() => {
+        const summe = [0, 0];
+        return l.spiele.map((s, i) => {
+          const p = spielPunkte(s);
+          summe[0] += p[0]; summe[1] += p[1];
+          const extra = t => [s.matsch === t ? 'Matsch' : '', s.weis[t] ? `Weis ${s.weis[t]}` : '', s.stoeck === t ? 'Stöck' : ''].filter(Boolean).join(', ');
+          return `<tr class="klickbar ${f.bearbeiten === i ? 'bearbeitet' : ''}" data-aktion="spiel-bearbeiten" data-index="${i}">
+            <td>${i + 1}</td>
+            <td><span class="zeile" style="gap:6px">${trumpfBild(s.trumpf, 20)} ×${s.faktor}</span></td>
+            <td class="gedaempft">${s.ansager === null || s.ansager === undefined ? '' : name(s.ansager)}</td>
+            <td class="rechts zahl">+${p[0]} <span class="gedaempft klein-text">${extra(0)}</span><br><strong>${summe[0]}</strong></td>
+            <td class="rechts zahl">+${p[1]} <span class="gedaempft klein-text">${extra(1)}</span><br><strong>${summe[1]}</strong></td>
+            <td class="rechts"><button class="link" data-aktion="spiel-loeschen" data-index="${i}">✕</button></td>
+          </tr>`;
+        }).join('');
+      })()}
+    </table>` : '';
+
+  const balken = t => `
+    <div>
+      <div class="zeile weit"><span>${paarName(a.teams[t])}</span><strong class="zahl" style="font-size:24px">${stand.total[t]}</strong></div>
+      <div class="balken">
+        <div style="width:${Math.min(100, stand.total[t] / r.zielPunkte * 100)}%"></div>
+        <span class="berg-marke" style="left:${r.bergPunkte / r.zielPunkte * 100}%"></span>
+      </div>
+    </div>`;
+
+  return `
+    <div class="karte stapel" id="zaehler">
+      <div class="zeile weit">
+        <h3 style="margin:0">${f.bearbeiten !== null ? `Spiel ${nr + 1} bearbeiten` : `Spiel ${nr + 1}`}</h3>
+        ${ansagerZeile}
+      </div>
+      ${l.spiele.length ? `<div class="gitter2">${balken(0)}${balken(1)}</div>` : ''}
+      ${stand.ziel !== null && f.bearbeiten === null ? `
+      <div class="banner" style="margin:0">
+        <span>🏆 <strong>${paarName(a.teams[stand.ziel])}</strong> haben ${r.zielPunkte} erreicht.</span>
+        <button class="primaer" data-aktion="partie-abschliessen">Partie abschliessen</button>
+      </div>` : `
+      <div class="trumpf">
+        ${TRUMPF.map(t => `<button class="${f.trumpf === t.key ? 'gewaehlt' : ''}" data-aktion="trumpf" data-trumpf="${t.key}">
+          ${trumpfBild(t.key)}<span>${t.name}</span><small>×${r.faktoren[t.key]}</small></button>`).join('')}
+      </div>
+      <div class="gitter2">${team(0)}${team(1)}</div>
+      <div class="vorschau" id="vorschau">${vorschauText(a, vorschau)}</div>
+      <div class="zeile">
+        <button class="primaer gross" style="flex:1" data-aktion="spiel-eintragen">${f.bearbeiten !== null ? 'Änderung speichern' : 'Spiel eintragen'}</button>
+        ${f.bearbeiten !== null || f.trumpf ? `<button class="gross" data-aktion="formular-leeren">Abbrechen</button>` : ''}
+      </div>`}
+      ${liste}
+    </div>`;
+}
+
+function vorschauText(a, spiel) {
+  if (!spiel) return '<span class="gedaempft klein-text">Trumpf wählen, Stichpunkte eines Teams eintippen – das andere Team bekommt den Rest auf 157.</span>';
+  const p = spielPunkte(spiel);
+  return `${paarName(a.teams[0])} <strong>+${p[0]}</strong> &nbsp;·&nbsp; ${paarName(a.teams[1])} <strong>+${p[1]}</strong>`;
 }
 
 function seiteChronik() {
@@ -765,9 +1024,17 @@ function seiteEinstellungen() {
           <div class="zeile weit"><span>Striche für den Berg</span><input type="number" data-regel="berg" value="${r.berg}"></div>
           <div class="zeile weit"><span>Striche pro Match</span><input type="number" data-regel="match" value="${r.match}"></div>
           <div class="zeile weit"><span>Striche fürs Ziel</span><input type="number" data-regel="ziel" value="${r.ziel}"></div>
+          <div class="zeile weit"><span>Bergmarke (Punkte)</span><input type="number" data-regel="bergPunkte" value="${r.bergPunkte}"></div>
           <div class="zeile weit"><span>Zielmarke (Punkte)</span><input type="number" data-regel="zielPunkte" value="${r.zielPunkte}"></div>
+          <div class="zeile weit"><span>Punkte für einen Matsch</span><input type="number" data-regel="matschPunkte" value="${r.matschPunkte}"></div>
           <div class="zeile weit"><span>Franken pro Strich</span><input type="number" step="0.5" data-regel="franken" value="${r.franken}"></div>
           <p class="hinweis">Änderungen gelten für neue Striche. Bereits gespeicherte Abende bleiben, wie sie waren.</p>
+        </div>
+        <div class="karte stapel">
+          <h3>Faktor pro Trumpf</h3>
+          ${TRUMPF.map(t => `<div class="zeile weit"><span class="zeile" style="gap:8px">${trumpfBild(t.key, 22)} ${t.name}</span>
+            <input type="number" min="1" data-faktor="${t.key}" value="${r.faktoren[t.key]}"></div>`).join('')}
+          <p class="hinweis">Der Faktor gilt für Stichpunkte, Matsch, Weis und Stöck.</p>
         </div>
         <div class="karte stapel">
           <h3>Datensicherung</h3>
@@ -812,7 +1079,7 @@ function importieren(datei) {
       const neu = JSON.parse(leser.result);
       if (!Array.isArray(neu.abende) || !Array.isArray(neu.spieler)) throw new Error('Keine Jassabend-Sicherung');
       if (!confirm(`Sicherung mit ${neu.abende.length} Abenden laden? Die aktuellen Daten auf diesem iPad werden ersetzt.`)) return;
-      daten = Object.assign(standardDaten(), neu, { sicherungNoetig: false });
+      daten = ergaenzen(Object.assign(neu, { sicherungNoetig: false }));
       speichern();
       zeichnen();
       toast('Sicherung geladen');
@@ -881,6 +1148,45 @@ $('#inhalt').addEventListener('click', e => {
       }
       break;
     case 'export': exportieren(); break;
+    case 'trumpf':
+      formular.trumpf = d.trumpf;
+      if (d.trumpf === 'obenabe' || d.trumpf === 'undenufe') formular.stoeck = null;
+      zeichnen(); break;
+    case 'matsch': {
+      const t = Number(d.team);
+      formular.matsch = formular.matsch === t ? null : t;
+      zeichnen(); break;
+    }
+    case 'stoeck': {
+      const t = Number(d.team);
+      formular.stoeck = formular.stoeck === t ? null : t;
+      zeichnen(); break;
+    }
+    case 'weis': formular.weis[d.team] += Number(d.wert); zeichnen(); break;
+    case 'weis-weg': formular.weis[d.team] = 0; zeichnen(); break;
+    case 'spiel-eintragen': spielEintragen(); break;
+    case 'formular-leeren': formular = leeresFormular(); zeichnen(); break;
+    case 'spiel-bearbeiten': {
+      const s = daten.aktiv.laufend.spiele[Number(d.index)];
+      formular = {
+        trumpf: s.trumpf, stich: s.matsch !== null ? ['', ''] : s.stich.map(String), matsch: s.matsch,
+        weis: [...s.weis], stoeck: s.stoeck, bearbeiten: Number(d.index),
+      };
+      zeichnen();
+      $('#zaehler').scrollIntoView({ behavior: 'smooth' });
+      break;
+    }
+    case 'spiel-loeschen':
+      e.stopPropagation();
+      if (confirm(`Spiel ${Number(d.index) + 1} löschen?`)) {
+        daten.aktiv.laufend.spiele.splice(Number(d.index), 1);
+        formular = leeresFormular();
+        speichern(); zeichnen();
+      }
+      break;
+    case 'start': daten.aktiv.laufend.start = Number(d.spieler); speichern(); zeichnen(); break;
+    case 'start-zuruecksetzen': daten.aktiv.laufend.start = null; speichern(); zeichnen(); break;
+    case 'richtung': daten.aktiv.laufend.richtung ^= 1; speichern(); zeichnen(); break;
     case 'ort-waehlen': daten.aktiv.ort = d.ort; speichern(); zeichnen(); break;
     case 'import': $('#import-datei').click(); break;
   }
@@ -898,6 +1204,10 @@ $('#inhalt').addEventListener('change', e => {
   else if (el.id === 'import-datei' && el.files[0]) importieren(el.files[0]);
   else if (el.dataset.spieler) { daten.spieler[el.dataset.spieler] = el.value.trim() || `Spieler ${Number(el.dataset.spieler) + 1}`; aenderung(); }
   else if (el.dataset.titel) { daten.titel[el.dataset.titel] = el.value.trim(); aenderung(); }
+  else if (el.dataset.faktor) {
+    const wert = Number(el.value);
+    if (wert > 0) { daten.regeln.faktoren[el.dataset.faktor] = wert; aenderung(); }
+  }
   else if (el.dataset.regel) {
     const wert = Number(el.value);
     if (wert >= 0) { daten.regeln[el.dataset.regel] = wert; aenderung(); }
@@ -907,6 +1217,18 @@ $('#inhalt').addEventListener('change', e => {
 $('#inhalt').addEventListener('input', e => {
   const el = e.target;
   if (el.dataset.punkte !== undefined) { daten.aktiv.laufend.punkte[el.dataset.punkte] = el.value; speichern(); }
+  else if (el.dataset.stich !== undefined) {
+    const t = Number(el.dataset.stich);
+    const wert = el.value === '' ? '' : Number(el.value);
+    formular.stich[t] = el.value;
+    formular.stich[1 - t] = wert !== '' && wert >= 0 && wert <= STICH_TOTAL ? String(STICH_TOTAL - wert) : '';
+    $(`[data-stich="${1 - t}"]`).value = formular.stich[1 - t];
+    $('#vorschau').innerHTML = vorschauText(daten.aktiv, formularSpiel().spiel);
+  }
+  else if (el.dataset.weis !== undefined) {
+    formular.weis[el.dataset.weis] = Math.max(0, Number(el.value) || 0);
+    $('#vorschau').innerHTML = vorschauText(daten.aktiv, formularSpiel().spiel);
+  }
   else if (el.id === 'abend-ort') { daten.aktiv.ort = el.value; speichern(); }
 });
 
