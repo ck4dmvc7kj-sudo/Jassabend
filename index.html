@@ -1138,7 +1138,7 @@ function seiteEinstellungen() {
         </div>
         <div class="karte stapel">
           <h3>Datensicherung</h3>
-          <p class="hinweis" style="margin:0">Die Daten liegen nur auf diesem iPad. Nach jeder Änderung erscheint oben ein Hinweis. Beim Speichern «In Dateien sichern» wählen und immer denselben Ort nehmen (z.B. iCloud Drive), dann die alte Datei ersetzen.</p>
+          <p class="hinweis" style="margin:0">Die Daten liegen nur auf diesem iPad. Nach jeder Änderung erscheint oben ein Hinweis. Beim Speichern «In Dateien sichern» wählen und immer denselben Ort nehmen (z.B. iCloud Drive). Jede Sicherung trägt das Datum im Namen; ältere kannst du löschen.</p>
           <div class="zeile">
             <button data-aktion="export">Sicherung speichern</button>
             <button data-aktion="import">Sicherung laden</button>
@@ -1153,11 +1153,11 @@ function seiteEinstellungen() {
 
 async function exportieren() {
   const json = JSON.stringify(daten, null, 2);
-  // Immer gleicher Name, damit «In Dateien sichern» die alte Sicherung ersetzen kann
-  const dateiname = 'Jassabend-Sicherung.json';
+  // Datum im Namen, weil «In Dateien sichern» meist eine neue Datei anlegt statt die alte zu ersetzen
+  const dateiname = `Jassabend-Sicherung ${heute()}.json`;
   const datei = new File([json], dateiname, { type: 'application/json' });
   if (navigator.canShare && navigator.canShare({ files: [datei] })) {
-    try { await navigator.share({ files: [datei], title: dateiname }); }
+    try { await navigator.share({ files: [datei] }); }
     catch (e) { return; }
   } else {
     const a = document.createElement('a');
