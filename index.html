@@ -112,6 +112,12 @@
   details.abend .inhalt { padding: 0 18px 18px; }
   .leer { text-align: center; padding: 50px 20px; color: var(--muted); }
   .hinweis { font-size: 14px; color: var(--muted); }
+  .orte { display: flex; gap: 8px; flex-wrap: wrap; }
+  .orte button { border-radius: 99px; }
+  .orte button.gewaehlt { border-color: var(--rot); color: var(--text); }
+  .banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    background: #2a1d05; border: 1px solid var(--gold); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 16px; }
+  h2.jahr { margin: 26px 0 10px; }
   .toast {
     position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
     background: var(--panel2); border: 1px solid var(--line); padding: 12px 20px; border-radius: 12px;
@@ -155,6 +161,7 @@ function standardDaten() {
     abende: [],
     aktiv: null,
     kasse: [],
+    sicherungNoetig: false,
   };
 }
 
@@ -296,6 +303,22 @@ function kassenStand() {
   return kassenBewegungen().reduce((s, b) => s + b.betrag, 0);
 }
 
+// Bisher erfasste Orte, die häufigsten zuerst
+function bekannteOrte() {
+  const anzahl = {};
+  for (const a of daten.abende) if (a.ort) anzahl[a.ort] = (anzahl[a.ort] || 0) + 1;
+  return Object.keys(anzahl).sort((x, y) => anzahl[y] - anzahl[x] || x.localeCompare(y));
+}
+
+function ortListe() {
+  return `<datalist id="orte">${bekannteOrte().map(o => `<option value="${esc(o)}">`).join('')}</datalist>`;
+}
+
+function aenderung() {
+  daten.sicherungNoetig = true;
+  speichern();
+}
+
 // ---------- Teams auslosen ----------
 
 const PAARUNGEN = [
@@ -344,6 +367,7 @@ function neuerAbend() {
   daten.aktiv = {
     id: id(),
     datum: heute(),
+    ort: '',
     teams: zufallsTeams(),
     partien: [],
     laufend: { ereignisse: [], punkte: ['', ''] },
@@ -409,13 +433,14 @@ function abendAbschliessen() {
   daten.abende.push({
     id: a.id,
     datum: a.datum,
+    ort: (a.ort || '').trim(),
     partien: a.partien,
     striche,
     beitraege: b,
     sieger: abendSieger(striche),
   });
   daten.aktiv = null;
-  speichern();
+  aenderung();
   seite = 'chronik';
   zeichnen();
   toast('Abend gespeichert');
@@ -430,7 +455,7 @@ function seiteAbend() {
     return `
       <div class="karte leer stapel">
         <div class="farben">${FARBEN.map(f => farbe(f, 64)).join('')}</div>
-        <p>${letzter ? `Letzter Jassabend: ${datumLang(letzter.datum)}` : 'Noch kein Jassabend erfasst.'}</p>
+        <p>${letzter ? `Letzter Jassabend: ${datumLang(letzter.datum)}${letzter.ort ? ' im ' + esc(letzter.ort) : ''}` : 'Noch kein Jassabend erfasst.'}</p>
         <button class="primaer gross" data-aktion="neuer-abend">Neuen Jassabend starten</button>
       </div>`;
   }
@@ -496,9 +521,13 @@ function seiteAbend() {
         <div class="zeile">
           <h2 style="margin:0">Jassabend</h2>
           <input type="date" id="abend-datum" value="${a.datum}" max="${heute()}">
+          <input type="text" id="abend-ort" list="orte" value="${esc(a.ort || '')}" placeholder="Ort, z.B. Restaurant" autocomplete="off" style="width:240px">
+          ${ortListe()}
         </div>
         <button data-aktion="abend-abschliessen">Abend abschliessen</button>
       </div>
+      ${bekannteOrte().length ? `<div class="orte">${bekannteOrte().slice(0, 8).map(o =>
+        `<button class="klein ${o === a.ort ? 'gewaehlt' : ''}" data-aktion="ort-waehlen" data-ort="${esc(o)}">📍 ${esc(o)}</button>`).join('')}</div>` : ''}
 
       <div class="gitter-abend">
         <div class="stapel">
@@ -541,15 +570,21 @@ function seiteAbend() {
 function seiteChronik() {
   if (!daten.abende.length) return `<div class="karte leer">Noch keine Jassabende in der Chronik.</div>`;
   const abende = [...daten.abende].sort((x, y) => y.datum.localeCompare(x.datum));
+  let jahr = null;
   return `
     <h2>Chronik <span class="gedaempft" style="font-weight:400">· ${abende.length} Abende</span></h2>
+    ${ortListe()}
     ${abende.map(a => {
+      const neuesJahr = a.datum.slice(0, 4) !== jahr;
+      jahr = a.datum.slice(0, 4);
+      const kopf = neuesJahr ? `<h2 class="jahr">${jahr} <span class="gedaempft" style="font-weight:400">· ${abende.filter(x => x.datum.startsWith(jahr)).length}× gejasst</span></h2>` : '';
       const summe = a.beitraege.reduce((s, x) => s + x, 0);
       const reihenfolge = [0, 1, 2, 3].sort((x, y) => a.striche[y] - a.striche[x]);
-      return `
+      return `${kopf}
       <details class="abend">
         <summary>
           <strong>${datumLang(a.datum)}</strong>
+          ${a.ort ? `<span>📍 ${esc(a.ort)}</span>` : ''}
           <span class="gedaempft">${a.partien.length} Partien</span>
           <span>${a.sieger.length ? '👑 ' + a.sieger.map(name).join(', ') : 'Unentschieden'}</span>
           <span style="margin-left:auto" class="zahl">${fr(summe)}</span>
@@ -571,7 +606,12 @@ function seiteChronik() {
               }).join('')}
             </table>
           </div>
-          <div class="rechts"><button class="link" data-aktion="abend-loeschen" data-id="${a.id}">Abend löschen</button></div>
+          <div class="zeile weit">
+            <label class="zeile gedaempft klein-text">Ort
+              <input type="text" list="orte" data-ort-abend="${a.id}" value="${esc(a.ort || '')}" placeholder="Ort" autocomplete="off">
+            </label>
+            <button class="link" data-aktion="abend-loeschen" data-id="${a.id}">Abend löschen</button>
+          </div>
         </div>
       </details>`;
     }).join('')}`;
@@ -581,30 +621,9 @@ function seiteRangliste() {
   const jahre = [...new Set(daten.abende.map(a => a.datum.slice(0, 4)))].sort().reverse();
   if (ranglistenJahr !== 'alle' && !jahre.includes(ranglistenJahr)) ranglistenJahr = 'alle';
   const abende = daten.abende.filter(a => ranglistenJahr === 'alle' || a.datum.startsWith(ranglistenJahr));
-
-  const werte = [0, 1, 2, 3].map(i => ({ i, siege: 0, striche: 0, partien: 0, partienGewonnen: 0, bezahlt: 0, abende: 0 }));
-  for (const a of abende) {
-    a.sieger.forEach(i => werte[i].siege++);
-    a.striche.forEach((n, i) => { werte[i].striche += n; werte[i].abende++; });
-    a.beitraege.forEach((x, i) => werte[i].bezahlt += x);
-    for (const p of a.partien) {
-      const s = partieSieger(p);
-      p.teams.forEach((paar, t) => paar.forEach(i => {
-        werte[i].partien++;
-        if (s === t) werte[i].partienGewonnen++;
-      }));
-    }
-  }
-  werte.sort((x, y) => y.siege - x.siege || y.striche - x.striche || x.bezahlt - y.bezahlt);
-
-  // Gleiche Werte → gleicher Rang
-  let rang = 0;
-  werte.forEach((w, k) => {
-    const vorher = werte[k - 1];
-    if (!vorher || vorher.siege !== w.siege || vorher.striche !== w.striche || vorher.bezahlt !== w.bezahlt) rang = k;
-    w.rang = rang;
-  });
+  const werte = rangliste(abende);
   const symbole = ['👑', '🤴', '🎩', '🃏'];
+  const jahresTabelle = jahresUebersicht(jahre);
 
   return `
     <div class="zeile weit" style="margin-bottom:12px">
@@ -630,7 +649,59 @@ function seiteRangliste() {
           </tr>`).join('')}
       </table>
       <p class="hinweis">Reihenfolge: zuerst Abendsiege, dann Striche total, dann wer weniger einbezahlt hat. Bei Gleichstand am Abend zählt der Sieg für alle mit den meisten Strichen.</p>
-    </div>`}`;
+    </div>
+    ${jahresTabelle}`}`;
+}
+
+function jahresUebersicht(jahre) {
+  return `
+    <div class="karte" style="margin-top:16px">
+      <h3>Jahresübersicht</h3>
+      <table>
+        <tr><th>Jahr</th><th class="rechts">Abende</th><th class="rechts">Partien</th><th>Meist gejasst im</th><th>${esc(daten.titel[0])}</th><th class="rechts">In die Kasse</th></tr>
+        ${jahre.map(j => {
+          const abende = daten.abende.filter(a => a.datum.startsWith(j));
+          const orte = {};
+          abende.forEach(a => { if (a.ort) orte[a.ort] = (orte[a.ort] || 0) + 1; });
+          const lieblingsort = Object.keys(orte).sort((x, y) => orte[y] - orte[x])[0];
+          const erste = rangliste(abende).filter(w => w.rang === 0).map(w => name(w.i));
+          return `<tr>
+            <td><strong>${j}</strong></td>
+            <td class="rechts zahl">${abende.length}</td>
+            <td class="rechts zahl">${abende.reduce((n, a) => n + a.partien.length, 0)}</td>
+            <td>${lieblingsort ? `${esc(lieblingsort)} <span class="gedaempft">(${orte[lieblingsort]}×)</span>` : '–'}</td>
+            <td>${erste.join(', ')}</td>
+            <td class="rechts zahl">${fr(abende.reduce((n, a) => n + a.beitraege.reduce((s, x) => s + x, 0), 0))}</td>
+          </tr>`;
+        }).join('')}
+      </table>
+    </div>`;
+}
+
+function rangliste(abende) {
+  const werte = [0, 1, 2, 3].map(i => ({ i, siege: 0, striche: 0, partien: 0, partienGewonnen: 0, bezahlt: 0, abende: 0 }));
+  for (const a of abende) {
+    a.sieger.forEach(i => werte[i].siege++);
+    a.striche.forEach((n, i) => { werte[i].striche += n; werte[i].abende++; });
+    a.beitraege.forEach((x, i) => werte[i].bezahlt += x);
+    for (const p of a.partien) {
+      const s = partieSieger(p);
+      p.teams.forEach((paar, t) => paar.forEach(i => {
+        werte[i].partien++;
+        if (s === t) werte[i].partienGewonnen++;
+      }));
+    }
+  }
+  werte.sort((x, y) => y.siege - x.siege || y.striche - x.striche || x.bezahlt - y.bezahlt);
+
+  // Gleiche Werte → gleicher Rang
+  let rang = 0;
+  werte.forEach((w, k) => {
+    const vorher = werte[k - 1];
+    if (!vorher || vorher.siege !== w.siege || vorher.striche !== w.striche || vorher.bezahlt !== w.bezahlt) rang = k;
+    w.rang = rang;
+  });
+  return werte;
 }
 
 function seiteKasse() {
@@ -700,7 +771,7 @@ function seiteEinstellungen() {
         </div>
         <div class="karte stapel">
           <h3>Datensicherung</h3>
-          <p class="hinweis" style="margin:0">Die Daten liegen nur auf diesem iPad. Speichere ab und zu eine Sicherung, z.B. in iCloud Drive oder auf dem NAS.</p>
+          <p class="hinweis" style="margin:0">Die Daten liegen nur auf diesem iPad. Nach jeder Änderung erscheint oben ein Hinweis. Beim Speichern «In Dateien sichern» wählen und immer denselben Ort nehmen (z.B. iCloud Drive), dann die alte Datei ersetzen.</p>
           <div class="zeile">
             <button data-aktion="export">Sicherung speichern</button>
             <button data-aktion="import">Sicherung laden</button>
@@ -715,17 +786,23 @@ function seiteEinstellungen() {
 
 async function exportieren() {
   const json = JSON.stringify(daten, null, 2);
-  const dateiname = `jassabend-${heute()}.json`;
+  // Immer gleicher Name, damit «In Dateien sichern» die alte Sicherung ersetzen kann
+  const dateiname = 'Jassabend-Sicherung.json';
   const datei = new File([json], dateiname, { type: 'application/json' });
   if (navigator.canShare && navigator.canShare({ files: [datei] })) {
-    try { await navigator.share({ files: [datei], title: dateiname }); return; }
-    catch (e) { if (e.name === 'AbortError') return; }
+    try { await navigator.share({ files: [datei], title: dateiname }); }
+    catch (e) { return; }
+  } else {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(datei);
+    a.download = dateiname;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(datei);
-  a.download = dateiname;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  daten.sicherungNoetig = false;
+  speichern();
+  zeichnen();
+  toast('Sicherung gespeichert');
 }
 
 function importieren(datei) {
@@ -735,7 +812,7 @@ function importieren(datei) {
       const neu = JSON.parse(leser.result);
       if (!Array.isArray(neu.abende) || !Array.isArray(neu.spieler)) throw new Error('Keine Jassabend-Sicherung');
       if (!confirm(`Sicherung mit ${neu.abende.length} Abenden laden? Die aktuellen Daten auf diesem iPad werden ersetzt.`)) return;
-      daten = Object.assign(standardDaten(), neu);
+      daten = Object.assign(standardDaten(), neu, { sicherungNoetig: false });
       speichern();
       zeichnen();
       toast('Sicherung geladen');
@@ -752,7 +829,12 @@ const SEITEN = { abend: seiteAbend, chronik: seiteChronik, rangliste: seiteRangl
 
 function zeichnen() {
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('aktiv', b.dataset.seite === seite));
-  $('#inhalt').innerHTML = SEITEN[seite]();
+  const banner = daten.sicherungNoetig && !daten.aktiv ? `
+    <div class="banner">
+      <span>💾 Seit der letzten Sicherung hat sich etwas geändert.</span>
+      <button class="primaer klein" data-aktion="export">Sicherung jetzt speichern</button>
+    </div>` : '';
+  $('#inhalt').innerHTML = banner + SEITEN[seite]();
 }
 
 $('#nav').addEventListener('click', e => {
@@ -779,7 +861,7 @@ $('#inhalt').addEventListener('click', e => {
       const a = daten.abende.find(x => x.id === d.id);
       if (a && confirm(`Jassabend vom ${datumLang(a.datum)} wirklich löschen? Auch sein Beitrag zur Jasskasse verschwindet.`)) {
         daten.abende = daten.abende.filter(x => x.id !== d.id);
-        speichern(); zeichnen();
+        aenderung(); zeichnen();
       }
       break;
     }
@@ -789,16 +871,17 @@ $('#inhalt').addEventListener('click', e => {
       const datum = $('#k-datum').value || heute();
       if (!(betrag > 0)) { alert('Bitte einen Betrag eingeben.'); return; }
       daten.kasse.push({ id: id(), datum, betrag: betrag * Number(d.richtung), text: text || (d.richtung === '1' ? 'Einzahlung' : 'Ausgabe') });
-      speichern(); zeichnen();
+      aenderung(); zeichnen();
       break;
     }
     case 'kasse-loeschen':
       if (confirm('Diese Buchung löschen?')) {
         daten.kasse = daten.kasse.filter(k => k.id !== d.id);
-        speichern(); zeichnen();
+        aenderung(); zeichnen();
       }
       break;
     case 'export': exportieren(); break;
+    case 'ort-waehlen': daten.aktiv.ort = d.ort; speichern(); zeichnen(); break;
     case 'import': $('#import-datei').click(); break;
   }
 });
@@ -806,19 +889,25 @@ $('#inhalt').addEventListener('click', e => {
 $('#inhalt').addEventListener('change', e => {
   const el = e.target;
   if (el.id === 'abend-datum' && el.value) { daten.aktiv.datum = el.value; speichern(); }
+  else if (el.id === 'abend-ort') { daten.aktiv.ort = el.value.trim(); speichern(); }
+  else if (el.dataset.ortAbend) {
+    const a = daten.abende.find(x => x.id === el.dataset.ortAbend);
+    if (a) { a.ort = el.value.trim(); aenderung(); }
+  }
   else if (el.id === 'rangliste-jahr') { ranglistenJahr = el.value; zeichnen(); }
   else if (el.id === 'import-datei' && el.files[0]) importieren(el.files[0]);
-  else if (el.dataset.spieler) { daten.spieler[el.dataset.spieler] = el.value.trim() || `Spieler ${Number(el.dataset.spieler) + 1}`; speichern(); }
-  else if (el.dataset.titel) { daten.titel[el.dataset.titel] = el.value.trim(); speichern(); }
+  else if (el.dataset.spieler) { daten.spieler[el.dataset.spieler] = el.value.trim() || `Spieler ${Number(el.dataset.spieler) + 1}`; aenderung(); }
+  else if (el.dataset.titel) { daten.titel[el.dataset.titel] = el.value.trim(); aenderung(); }
   else if (el.dataset.regel) {
     const wert = Number(el.value);
-    if (wert >= 0) { daten.regeln[el.dataset.regel] = wert; speichern(); }
+    if (wert >= 0) { daten.regeln[el.dataset.regel] = wert; aenderung(); }
   }
 });
 
 $('#inhalt').addEventListener('input', e => {
   const el = e.target;
   if (el.dataset.punkte !== undefined) { daten.aktiv.laufend.punkte[el.dataset.punkte] = el.value; speichern(); }
+  else if (el.id === 'abend-ort') { daten.aktiv.ort = el.value; speichern(); }
 });
 
 $('#logo').innerHTML = farbe('rosen', 30);
