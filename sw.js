@@ -1,5 +1,5 @@
 // Bei jeder Änderung an der App die Version erhöhen, damit das iPad die neue Fassung lädt
-const VERSION = 'jassabend-4';
+const VERSION = 'jassabend-5';
 const DATEIEN = ['./', 'index.html', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

@@ -134,6 +134,13 @@
   .ansager { font-size: 17px; }
   tr.klickbar { cursor: pointer; }
   tr.bearbeitet td { background: #3a1214; }
+  .umschalter { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .umschalter button { border: none; border-radius: 0; background: none; color: var(--muted); }
+  .umschalter button.aktiv { background: var(--rot); color: #fff; }
+  .tafel-ansicht { display: flex; flex-direction: column; align-items: center; }
+  .tafel-ansicht svg { width: 100%; max-height: calc((100vh - 190px) / 2); display: block; }
+  .tafel-trenner { width: 100%; height: 4px; background: var(--rot); border-radius: 2px; margin: 4px 0; }
+  .tafel-leiste { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 8px; }
   .toast {
     position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
     background: var(--panel2); border: 1px solid var(--line); padding: 12px 20px; border-radius: 12px;
@@ -420,6 +427,8 @@ function ansagerFuer(l, teams, spielNr) {
 
 const leeresFormular = () => ({ trumpf: null, stich: ['', ''], matsch: null, weis: [0, 0], stoeck: null, bearbeiten: null });
 let formular = leeresFormular();
+let ansicht = 'eingabe';   // 'eingabe' oder 'tafel'
+let zurueckZurTafel = false;
 
 function formularSpiel() {
   const f = formular;
@@ -462,8 +471,97 @@ function spielEintragen() {
     }
   }
   formular = leeresFormular();
+  if (zurueckZurTafel) { ansicht = 'tafel'; zurueckZurTafel = false; window.scrollTo(0, 0); }
   speichern();
   zeichnen();
+}
+
+// ---------- Jasstafel ----------
+
+// Punkte wie auf der Tafel aufteilen: 100er oben, ein 50er auf der Diagonale, 20er unten, Rest als Zahl
+function tafelWerte(punkte) {
+  let rest = punkte;
+  const hunderter = Math.floor(rest / 100); rest -= hunderter * 100;
+  const fuenfziger = Math.floor(rest / 50); rest -= fuenfziger * 50;
+  const zwanziger = Math.floor(rest / 20); rest -= zwanziger * 20;
+  return { hunderter, fuenfziger, zwanziger, rest };
+}
+
+// Senkrechte Striche entlang einer Linie: je zehn als X, dann Fünfergruppen (vier Striche, einer quer), dann einzelne
+function strichReihe(anzahl, x0, y, h) {
+  let x = x0, svg = '';
+  const strich = xx => `<line x1="${xx}" y1="${y - h}" x2="${xx}" y2="${y + h}"/>`;
+  for (let i = 0; i < Math.floor(anzahl / 10); i++) {
+    svg += `<line x1="${x}" y1="${y - h}" x2="${x + 30}" y2="${y + h}"/><line x1="${x + 30}" y1="${y - h}" x2="${x}" y2="${y + h}"/>`;
+    x += 64;
+  }
+  const rest = anzahl % 10;
+  for (let g = 0; g < Math.floor(rest / 5); g++) {
+    for (let i = 0; i < 4; i++) svg += strich(x + i * 14);
+    svg += `<line x1="${x - 8}" y1="${y - h * .7}" x2="${x + 50}" y2="${y + h * .7}"/>`;
+    x += 86;
+  }
+  for (let i = 0; i < rest % 5; i++) { svg += strich(x); x += 14; }
+  return svg;
+}
+
+function tafelHaelfte(a, t, gedreht, total, striche) {
+  const w = tafelWerte(total);
+  const L = 220, R = 780, O = 70, U = 330;
+  // 50er quer zur Diagonale, vom unteren linken Ende her
+  const dx = R - L, dy = O - U, len = Math.hypot(dx, dy);
+  const ux = dx / len, uy = dy / len, px = -uy, py = ux;
+  let fuenfziger = '';
+  for (let i = 0; i < w.fuenfziger; i++) {
+    const cx = L + ux * len * (.18 + i * .07), cy = U + uy * len * (.18 + i * .07);
+    fuenfziger += `<line x1="${cx - px * 38}" y1="${cy - py * 38}" x2="${cx + px * 38}" y2="${cy + py * 38}"/>`;
+  }
+  const [n1, n2] = a.teams[t].map(i => esc(daten.spieler[i]));
+  return `
+    <svg viewBox="0 0 1000 400" role="img" aria-label="Tafel ${n1} und ${n2}: ${total} Punkte">
+      <g ${gedreht ? 'transform="rotate(180 500 200)"' : ''}>
+        <text x="500" y="250" text-anchor="middle" font-size="150" font-weight="600" fill="#2a2a2a">${total}</text>
+        <path d="M${L} ${O} H${R} L${L} ${U} H${R}" fill="none" stroke="#e0262b" stroke-width="4" stroke-linejoin="round"/>
+        <g stroke="#fff" stroke-width="4" stroke-linecap="round">
+          ${strichReihe(w.hunderter, L + 14, O, 38)}
+          ${fuenfziger}
+          ${strichReihe(w.zwanziger, L + 14, U, 38)}
+        </g>
+        <text x="${R + 40}" y="${U + 18}" font-size="60" fill="#fff">${w.rest || ''}</text>
+        <text x="20" y="${U - 50}" font-size="30" font-weight="600" fill="#f2f2f2">${n1}</text>
+        <text x="20" y="${U - 12}" font-size="30" font-weight="600" fill="#f2f2f2">${n2}</text>
+        ${striche ? `<text x="20" y="${O + 20}" font-size="24" fill="#8a8a8a">${striche} ${striche === 1 ? 'Strich' : 'Striche'}</text>` : ''}
+      </g>
+    </svg>`;
+}
+
+function tafelAnsicht(a) {
+  const l = a.laufend;
+  const stand = auswerten(l.spiele);
+  const ereignisse = alleEreignisse(l);
+  const striche = t => ereignisse.filter(e => e.team === t).reduce((s, e) => s + e.wert, 0);
+  const ansager = ansagerFuer(l, a.teams, l.spiele.length);
+  return `
+    <div class="tafel-leiste">
+      ${umschalter()}
+      <span class="ansager">${stand.ziel !== null ? `🏆 <strong>${paarName(a.teams[stand.ziel])}</strong> haben ${daten.regeln.zielPunkte} erreicht`
+        : ansager !== null ? `Ansagen: <strong>${name(ansager)}</strong>` : `Partie ${a.partien.length + 1} · Spiel ${l.spiele.length + 1}`}</span>
+      ${stand.ziel !== null
+        ? `<button class="primaer" data-aktion="partie-abschliessen">Partie abschliessen</button>`
+        : `<button class="primaer" data-aktion="zur-eingabe">+ Spiel eintragen</button>`}
+    </div>
+    <div class="tafel-ansicht">
+      ${tafelHaelfte(a, 1, true, stand.total[1], striche(1))}
+      <div class="tafel-trenner"></div>
+      ${tafelHaelfte(a, 0, false, stand.total[0], striche(0))}
+    </div>`;
+}
+
+function umschalter() {
+  return `<div class="umschalter">
+    <button class="${ansicht === 'eingabe' ? 'aktiv' : ''}" data-aktion="ansicht" data-ansicht="eingabe">Eingabe</button>
+    <button class="${ansicht === 'tafel' ? 'aktiv' : ''}" data-aktion="ansicht" data-ansicht="tafel">Tafel</button>
+  </div>`;
 }
 
 // ---------- Teams auslosen ----------
@@ -611,6 +709,8 @@ function seiteAbend() {
       </div>`;
   }
 
+  if (ansicht === 'tafel') return tafelAnsicht(a);
+
   const l = a.laufend;
   const r = daten.regeln;
   const ereignisse = alleEreignisse(l);
@@ -673,7 +773,7 @@ function seiteAbend() {
     <div class="stapel">
       <div class="zeile weit">
         <div class="zeile">
-          <h2 style="margin:0">Jassabend</h2>
+          ${umschalter()}
           <input type="date" id="abend-datum" value="${a.datum}" max="${heute()}">
           <input type="text" id="abend-ort" list="orte" value="${esc(a.ort || '')}" placeholder="Ort, z.B. Restaurant" autocomplete="off" style="width:240px">
           ${ortListe()}
@@ -1165,7 +1265,15 @@ $('#inhalt').addEventListener('click', e => {
     case 'weis': formular.weis[d.team] += Number(d.wert); zeichnen(); break;
     case 'weis-weg': formular.weis[d.team] = 0; zeichnen(); break;
     case 'spiel-eintragen': spielEintragen(); break;
-    case 'formular-leeren': formular = leeresFormular(); zeichnen(); break;
+    case 'formular-leeren':
+      formular = leeresFormular();
+      if (zurueckZurTafel) { ansicht = 'tafel'; zurueckZurTafel = false; }
+      zeichnen(); break;
+    case 'ansicht': ansicht = d.ansicht; zurueckZurTafel = false; zeichnen(); window.scrollTo(0, 0); break;
+    case 'zur-eingabe':
+      ansicht = 'eingabe'; zurueckZurTafel = true; zeichnen();
+      $('#zaehler').scrollIntoView();
+      break;
     case 'spiel-bearbeiten': {
       const s = daten.aktiv.laufend.spiele[Number(d.index)];
       formular = {
